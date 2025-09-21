@@ -98,3 +98,6 @@ mpiexec -n 6 python mpi_sgd_nn.py --csv nytaxi2022.csv --patience 50 --lr 0.005
 
 * **Memory errors:** Reduce `--max_rows` or increase the number of processes.
 * **Slow performance at high process counts:** Communication overhead may dominate; optimal process count depends on your hardware.
+
+## Repository
+* You can find the GitHub repository of this project here: https://github.com/ashwinkumaar/dsa5208-mpi-project
