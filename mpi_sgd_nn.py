@@ -616,7 +616,7 @@ def run_experiments(args):
     # Save results
     if rank == 0:
         timestamp = int(time.time())
-        results_filename = f'improved_results_np{size}_{timestamp}.pkl'
+        results_filename = f'results_np{size}_{timestamp}.pkl'
         with open(results_filename, 'wb') as f:
             pickle.dump(results, f)
         mpi_print(rank, f"Results saved to {results_filename}")
@@ -848,7 +848,7 @@ def plot_results(results):
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig('improved_training_results.png', dpi=300, bbox_inches='tight')
+    plt.savefig('training_results.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -952,7 +952,7 @@ if __name__ == "__main__":
     # Improvements
     parser.add_argument("--momentum", type=float, default=0, help="Momentum coefficient")  # default - no momentum by setting it to 0
     parser.add_argument("--patience", type=int, default=1e9, help="Early stopping patience") # default - turn off patience by setting it to a large value > max_iter
-    parser.add_argument("--use_batch_norm", action='store_true', default=True, help="Use batch normalization") # default - turn it off by setting it to False
+    parser.add_argument("--use_batch_norm", action='store_true', default=False, help="Use batch normalization") # default - turn it off by setting it to False
 
     args = parser.parse_args()
 
@@ -975,5 +975,5 @@ if __name__ == "__main__":
 
     if rank == 0:
         mpi_print(rank, "\nExperiment completed successfully!")
-        mpi_print(rank, "Check 'improved_training_results.png' for visualization plots.")
+        mpi_print(rank, "Check 'training_results.png' for visualization plots.")
         mpi_print(rank, "Results saved in pickle format for further analysis.")
