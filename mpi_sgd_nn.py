@@ -193,59 +193,57 @@ def preprocess_rows(rows, args):
 
 
 def load_and_split_data(csv_path: str, train_split: float, max_rows: int, comm: MPI.Intracomm, args):
-    """Load data and split into train/test sets distributed across processes"""
+    """Stream rows, preprocess, and split into train/test sets distributed across processes"""
     rank = comm.Get_rank()
     size = comm.Get_size()
 
-    # Load all data on rank 0, then distribute
+    # Local storage for this rank
+    X_train_local, y_train_local = [], []
+    X_test_local, y_test_local = [], []
+
     if rank == 0:
         rows = []
+        print("Reading data on rank 0...")
         with open(csv_path, newline="", encoding="utf-8", errors="replace") as f:
             reader = csv.DictReader(f)
             for i, row in enumerate(reader):
                 rows.append(row)
+                if i % 100000 == 0:
+                    mpi_print(rank, f"Read {i:,} rows")
                 if max_rows and i >= max_rows:
                     break
 
-        # Preprocess all data
+        mpi_print(rank, f"Read data on rank 0. Row count: {len(rows):,}")
+        mpi_print(rank, "Preprocessing data...")
+        # Preprocess all rows at once (still required here, since preprocess_rows likely vectorized)
         X_all, y_all = preprocess_rows(rows, args)
-        mpi_print(rank, f"Total samples after preprocessing: {len(X_all)}")
+        mpi_print(rank, f"Total samples after preprocessing: {len(X_all):,}")
 
-        # Shuffle data
+        # Shuffle indices
         indices = np.random.permutation(len(X_all))
-        X_all = X_all[indices]
-        y_all = y_all[indices]
+        X_all, y_all = X_all[indices], y_all[indices]
 
-        # Split train/test
+        # Train/test split
         split_idx = int(len(X_all) * train_split)
-        X_train_all = X_all[:split_idx]
-        y_train_all = y_all[:split_idx]
-        X_test_all = X_all[split_idx:]
-        y_test_all = y_all[split_idx:]
+        X_train_all, y_train_all = X_all[:split_idx], y_all[:split_idx]
+        X_test_all, y_test_all = X_all[split_idx:], y_all[split_idx:]
 
-        mpi_print(rank, f"Train samples: {len(X_train_all)}, Test samples: {len(X_test_all)}")
+        mpi_print(rank, f"Train samples: {len(X_train_all):,}, Test samples: {len(X_test_all):,}")
+
+        # Split across processes *before* sending
+        train_splits_X = np.array_split(X_train_all, size)
+        train_splits_y = np.array_split(y_train_all, size)
+        test_splits_X = np.array_split(X_test_all, size)
+        test_splits_y = np.array_split(y_test_all, size)
     else:
-        X_train_all = y_train_all = X_test_all = y_test_all = None
+        train_splits_X = train_splits_y = None
+        test_splits_X = test_splits_y = None
 
-    # Distribute data to processes
-    X_train_all = comm.bcast(X_train_all, root=0)
-    y_train_all = comm.bcast(y_train_all, root=0)
-    X_test_all = comm.bcast(X_test_all, root=0)
-    y_test_all = comm.bcast(y_test_all, root=0)
-
-    # Each process gets its shard
-    n_train = len(X_train_all)
-    n_test = len(X_test_all)
-
-    train_start = (n_train * rank) // size
-    train_end = (n_train * (rank + 1)) // size
-    test_start = (n_test * rank) // size
-    test_end = (n_test * (rank + 1)) // size
-
-    X_train_local = X_train_all[train_start:train_end]
-    y_train_local = y_train_all[train_start:train_end]
-    X_test_local = X_test_all[test_start:test_end]
-    y_test_local = y_test_all[test_start:test_end]
+    # Scatter slices to each process
+    X_train_local = comm.scatter(train_splits_X, root=0)
+    y_train_local = comm.scatter(train_splits_y, root=0)
+    X_test_local = comm.scatter(test_splits_X, root=0)
+    y_test_local = comm.scatter(test_splits_y, root=0)
 
     return X_train_local, y_train_local, X_test_local, y_test_local
 
@@ -954,7 +952,7 @@ if __name__ == "__main__":
     # Improvements
     parser.add_argument("--momentum", type=float, default=0, help="Momentum coefficient")  # default - no momentum by setting it to 0
     parser.add_argument("--patience", type=int, default=1e9, help="Early stopping patience") # default - turn off patience by setting it to a large value > max_iter
-    parser.add_argument("--use_batch_norm", action='store_true', default=False, help="Use batch normalization") # default - turn it off by setting it to False
+    parser.add_argument("--use_batch_norm", action='store_true', default=True, help="Use batch normalization") # default - turn it off by setting it to False
 
     args = parser.parse_args()
 
