@@ -134,6 +134,7 @@ TARGET_COL = "total_amount"
 def preprocess_rows(rows, args):
     """Enhanced preprocessing with feature engineering"""
     X, y = [], []
+    skipped = 0
     for r in rows:
         # Skip incomplete rows
         required_fields = [
@@ -142,7 +143,8 @@ def preprocess_rows(rows, args):
             "PULocationID", "DOLocationID", "payment_type",
             "extra", TARGET_COL
         ]
-        if any(r.get(f, "").strip() == "" for f in required_fields):
+        if any(r.get(f, "").strip() == "" or '/uFFFD' in r.get(f, "") for f in required_fields):
+            skipped += 1
             continue
 
         # Extract and engineer features
@@ -186,6 +188,7 @@ def preprocess_rows(rows, args):
         X.append(features)
         y.append(target)
 
+    print(f"Skipped {skipped} rows during preprocessing")
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
 
 
@@ -197,7 +200,7 @@ def load_and_split_data(csv_path: str, train_split: float, max_rows: int, comm: 
     # Load all data on rank 0, then distribute
     if rank == 0:
         rows = []
-        with open(csv_path, newline="", encoding="utf-8") as f:
+        with open(csv_path, newline="", encoding="utf-8", errors="replace") as f:
             reader = csv.DictReader(f)
             for i, row in enumerate(reader):
                 rows.append(row)
@@ -560,6 +563,14 @@ def run_experiments(args):
                 use_batch_norm=args.use_batch_norm
             )
 
+            # Initial evaluation
+            y_train_pred = model.forward(X_train_local, training=False)
+            y_test_pred = model.forward(X_test_local, training=False)
+
+            initial_train_rmse = parallel_rmse(y_train_local, y_train_pred, comm)
+            initial_test_rmse = parallel_rmse(y_test_local, y_test_pred, comm)
+            initial_train_loss = parallel_loss(y_train_local, y_train_pred, comm)
+
             history = distributed_stochastic_gradient_descent(
                 model, X_train_local, y_train_local, X_test_local, y_test_local,
                 batch_size=batch_size, max_iterations=args.max_iter, comm=comm,
@@ -583,6 +594,9 @@ def run_experiments(args):
                 'learning_rate': args.lr,
                 'momentum': args.momentum,
                 'use_batch_norm': args.use_batch_norm,
+                'initial_train_rmse': final_train_rmse,
+                'initial_test_rmse': final_test_rmse,
+                'initial_train_loss': final_train_loss,
                 'final_train_rmse': final_train_rmse,
                 'final_test_rmse': final_test_rmse,
                 'final_train_loss': final_train_loss,
@@ -780,14 +794,14 @@ def plot_results(results):
     for result in results:
         if result['training_time'] > 0:
             # Calculate efficiency as RMSE improvement per second
-            initial_rmse = 100  # Assume initial RMSE TODO: compute initial rmse
+            initial_rmse = result['history']['test_rmse'][0]
             improvement = max(0, initial_rmse - result['final_test_rmse'])
             efficiency = improvement / result['training_time']
             efficiency_scores.append(efficiency)
             labels.append(f"{result['activation'][:4]}-{result['batch_size']}")
 
     # Sort by efficiency
-    sorted_indices = np.argsort(efficiency_scores)[::-1][:10]  # Top 10
+    sorted_indices = np.argsort(efficiency_scores)[:10]  # Top 10
     top_scores = [efficiency_scores[i] for i in sorted_indices]
     top_labels = [labels[i] for i in sorted_indices]
 
@@ -931,15 +945,16 @@ def print_experiment_summary(results):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Improved MPI-based SGD for Neural Networks')
     parser.add_argument("--csv", type=str, required=True, help="Path to CSV dataset")
-    parser.add_argument("--max_iter", type=int, default=1000, help="Maximum iterations")
+    parser.add_argument("--max_iter", type=int, default=500, help="Maximum iterations")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate")
-    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum coefficient")
     parser.add_argument("--hidden", type=int, default=64, help="Hidden layer neurons")
     parser.add_argument("--hash_buckets", type=int, default=256, help="Hash buckets for categorical features")
     parser.add_argument("--train_split", type=float, default=0.7, help="Train/test split ratio")
     parser.add_argument("--max_rows", type=int, default=0, help="Max rows to process (0 for all)")
-    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience")
-    parser.add_argument("--use_batch_norm", action='store_true', default=True, help="Use batch normalization")
+    # Improvements
+    parser.add_argument("--momentum", type=float, default=0, help="Momentum coefficient")  # default - no momentum by setting it to 0
+    parser.add_argument("--patience", type=int, default=1e9, help="Early stopping patience") # default - turn off patience by setting it to a large value > max_iter
+    parser.add_argument("--use_batch_norm", action='store_true', default=False, help="Use batch normalization") # default - turn it off by setting it to False
 
     args = parser.parse_args()
 
